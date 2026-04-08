@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, BookOpen, Star, Clock, User, Share2, BookmarkPlus, ChevronRight, List, Ticket, Check, MessageSquare, ThumbsUp } from 'lucide-react';
-import { motion } from 'motion/react';
+import { ArrowLeft, BookOpen, Star, Clock, User, Share2, BookmarkPlus, ChevronRight, List, Ticket, Check, MessageSquare, ThumbsUp, Download, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 
 export default function NovelDetails({ novelId, onBack, onChapterSelect }: { novelId: string, onBack: () => void, onChapterSelect: (chapterId: string) => void }) {
   const [novel, setNovel] = useState<any>(null);
@@ -8,6 +8,13 @@ export default function NovelDetails({ novelId, onBack, onChapterSelect }: { nov
   const [error, setError] = useState<string | null>(null);
   const [showFullDesc, setShowFullDesc] = useState(false);
   const [detailsTab, setDetailsTab] = useState<'about' | 'toc' | 'reviews' | 'recommendations'>('about');
+  
+  // EPUB Download State
+  const [showEpubModal, setShowEpubModal] = useState(false);
+  const [epubStart, setEpubStart] = useState(1);
+  const [epubEnd, setEpubEnd] = useState(50);
+  const [isGeneratingEpub, setIsGeneratingEpub] = useState(false);
+  const [epubError, setEpubError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchDetails = async () => {
@@ -17,6 +24,11 @@ export default function NovelDetails({ novelId, onBack, onChapterSelect }: { nov
         if (!res.ok) throw new Error('Failed to fetch novel details');
         const data = await res.json();
         setNovel(data);
+        
+        // Set default epub end to max 50 or total chapters
+        if (data.chapters && data.chapters.length > 0) {
+          setEpubEnd(Math.min(50, data.chapters.length));
+        }
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -25,6 +37,58 @@ export default function NovelDetails({ novelId, onBack, onChapterSelect }: { nov
     };
     fetchDetails();
   }, [novelId]);
+
+  const handleDownloadEpub = async () => {
+    if (!novel || !novel.chapters) return;
+    
+    const startIdx = Math.max(0, epubStart - 1);
+    const endIdx = Math.min(novel.chapters.length, epubEnd);
+    
+    if (endIdx - startIdx > 100) {
+      setEpubError("You can only download up to 100 chapters at a time.");
+      return;
+    }
+    if (startIdx >= endIdx) {
+      setEpubError("Invalid chapter range.");
+      return;
+    }
+
+    const chapterIds = novel.chapters.slice(startIdx, endIdx).map((c: any) => c.id);
+    
+    try {
+      setIsGeneratingEpub(true);
+      setEpubError(null);
+      
+      const res = await fetch(`/api/novels/${novelId}/epub`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ chapterIds })
+      });
+      
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to generate EPUB');
+      }
+      
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${novel.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${epubStart}-${epubEnd}.epub`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      setShowEpubModal(false);
+    } catch (err: any) {
+      setEpubError(err.message);
+    } finally {
+      setIsGeneratingEpub(false);
+    }
+  };
 
   if (loading) return (
     <div className="max-w-7xl mx-auto px-4 py-8 animate-pulse">
@@ -84,11 +148,17 @@ export default function NovelDetails({ novelId, onBack, onChapterSelect }: { nov
           </div>
           
           <div className="grid grid-cols-2 gap-3 mt-6">
-            <button className="flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl font-medium shadow-lg shadow-indigo-500/25 transition-all hover:-translate-y-0.5">
+            <button 
+              onClick={() => novel.chapters && novel.chapters.length > 0 && onChapterSelect(novel.chapters[0].id)}
+              className="flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl font-medium shadow-lg shadow-indigo-500/25 transition-all hover:-translate-y-0.5"
+            >
               <BookOpen className="w-4 h-4" /> Read
             </button>
-            <button className="flex items-center justify-center gap-2 py-3 bg-[#16181d] hover:bg-white/10 border border-white/10 text-white rounded-xl font-medium transition-all hover:-translate-y-0.5">
-              <BookmarkPlus className="w-4 h-4" /> Save
+            <button 
+              onClick={() => setShowEpubModal(true)}
+              className="flex items-center justify-center gap-2 py-3 bg-[#16181d] hover:bg-white/10 border border-white/10 text-white rounded-xl font-medium transition-all hover:-translate-y-0.5"
+            >
+              <Download className="w-4 h-4" /> EPUB
             </button>
           </div>
         </motion.div>
@@ -253,6 +323,87 @@ export default function NovelDetails({ novelId, onBack, onChapterSelect }: { nov
           </div>
         </motion.div>
       </div>
+
+      {/* EPUB Download Modal */}
+      <AnimatePresence>
+        {showEpubModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => !isGeneratingEpub && setShowEpubModal(false)}
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="relative bg-[#16181d] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Download className="w-5 h-5 text-indigo-400" /> Download EPUB
+                </h3>
+                <button 
+                  onClick={() => !isGeneratingEpub && setShowEpubModal(false)}
+                  className="p-1 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                  disabled={isGeneratingEpub}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4 mb-6">
+                <p className="text-sm text-gray-400">
+                  Select the range of chapters to download. You can download up to 100 chapters at a time to prevent server timeouts.
+                </p>
+                
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Start Chapter</label>
+                    <input 
+                      type="number" 
+                      min={1} 
+                      max={totalChapters}
+                      value={epubStart}
+                      onChange={(e) => setEpubStart(parseInt(e.target.value) || 1)}
+                      className="w-full bg-[#0f1115] border border-white/10 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-indigo-500 transition-colors"
+                      disabled={isGeneratingEpub}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">End Chapter</label>
+                    <input 
+                      type="number" 
+                      min={1} 
+                      max={totalChapters}
+                      value={epubEnd}
+                      onChange={(e) => setEpubEnd(parseInt(e.target.value) || 1)}
+                      className="w-full bg-[#0f1115] border border-white/10 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-indigo-500 transition-colors"
+                      disabled={isGeneratingEpub}
+                    />
+                  </div>
+                </div>
+
+                {epubError && (
+                  <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+                    {epubError}
+                  </div>
+                )}
+              </div>
+
+              <button 
+                onClick={handleDownloadEpub}
+                disabled={isGeneratingEpub}
+                className="w-full flex items-center justify-center gap-2 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isGeneratingEpub ? (
+                  <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Generating EPUB...</>
+                ) : (
+                  <>Generate & Download</>
+                )}
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

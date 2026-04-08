@@ -4,6 +4,7 @@ import cors from "cors";
 import path from "path";
 import axios from "axios";
 import * as cheerio from "cheerio";
+import Epub from "epub-gen-memory";
 
 import * as qs from "qs";
 
@@ -452,6 +453,56 @@ async function startServer() {
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: "Failed to fetch chapter content", details: error.message });
+    }
+  });
+
+  app.post("/api/novels/:id/epub", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { chapterIds } = req.body;
+      
+      if (!chapterIds || !Array.isArray(chapterIds)) {
+        return res.status(400).json({ error: "chapterIds array is required" });
+      }
+      if (chapterIds.length > 100) {
+        return res.status(400).json({ error: "Maximum 100 chapters per download" });
+      }
+
+      const novel = await scraper.getNovelDetails(id);
+      const chaptersData = [];
+      
+      for (const chapId of chapterIds) {
+        try {
+          const chap = await scraper.getChapterContent(id, chapId);
+          chaptersData.push({
+            title: chap.title || `Chapter ${chapId}`,
+            content: chap.contentHtml || chap.contentText || "<p>No content found.</p>"
+          });
+          // Small delay to avoid rate limiting
+          await new Promise(r => setTimeout(r, 100));
+        } catch (e) {
+          console.error(`Failed to fetch chapter ${chapId}`, e);
+          chaptersData.push({
+            title: `Chapter ${chapId} (Failed)`,
+            content: `<p>Failed to load content.</p>`
+          });
+        }
+      }
+
+      const epubOptions = {
+        title: novel.title || "Unknown Novel",
+        author: novel.author || "Unknown Author",
+        cover: novel.image,
+      };
+
+      const epubBuffer = await Epub(epubOptions, chaptersData);
+      
+      res.setHeader('Content-Type', 'application/epub+zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${novel.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'novel'}.epub"`);
+      res.send(Buffer.from(epubBuffer));
+    } catch (error: any) {
+      console.error("EPUB generation error:", error);
+      res.status(500).json({ error: "Failed to generate EPUB", details: error.message });
     }
   });
 
